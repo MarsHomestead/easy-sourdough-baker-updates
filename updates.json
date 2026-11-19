@@ -1,0 +1,28 @@
+{
+  "bot": "easy-sourdough-baker",
+  "latest": "1.1.0",
+  "updates": [
+    {
+      "version": "1.0.0",
+      "date": "2026-11-18",
+      "title": "First public update feed",
+      "summary": "First public update feed for published copies of Easy Sourdough Baker, with weekly checks for coaching guidance, videos, and recipes. Updates never overwrite a baker's own recipes, starter name, notes, or reminders.",
+      "changes": [
+        "First public update feed for published copies.",
+        "Weekly checks for coaching guidance, videos, and recipes.",
+        "Updates refresh coaching guidance only and never overwrite a baker's own recipes, starter name, notes, or reminders."
+      ]
+    },
+    {
+      "version": "1.1.0",
+      "date": "2026-11-19",
+      "title": "Owner asks before each weekly share and each update",
+      "summary": "Published copies now ask their baker before sending this week's Hive Mind notes and before applying a public update. Only bot setup information moves through Hive Mind. No personal information, passwords, account details or private data is ever sent or received.",
+      "changes": [
+        "Ask before each weekly Hive Mind share, and send only after a yes.",
+        "Ask before applying a public update, and apply coaching guidance only after a yes.",
+        "An update that asks for passwords, logins, codes, keys, account access or personal info is skipped, and the baker is told."
+      ]
+    }
+  ]
+}

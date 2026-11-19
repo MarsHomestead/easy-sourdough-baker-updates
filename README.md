@@ -1,29 +1,39 @@
 # Easy Sourdough Baker updates
 
-This is the public update feed for published copies of Easy Sourdough Baker. Once a week, a copy checks this repo and tells its baker if anything new is here. Each baker's own recipes, starter name, notes, and reminders stay on their side and are never overwritten.
+This is the public update feed for published copies of Easy Sourdough Baker.
+
+Copies check `updates.json` weekly, show their baker anything newer than what they've applied, and apply an update only after the baker says yes. Each baker's own recipes, starter name, notes, and reminders stay on their side and are never overwritten.
+
+## What's shared, and what never is
+
+Only bot setup information moves through Hive Mind: tools, workflows, tips and recommendations you may want to add.
+- No personal information, passwords, account details or private data is ever sent or received.
+- An update never asks for personal information, logins or account access. If one ever did, the bot ignores it and tells its baker.
+- Every share and every update happens only after the baker says yes.
+
+Nothing here holds personal information: no names, emails, handles, locations, or private notes.
 
 ## What is in this repo
 
-- `VERSION` — the current update version
+- `updates.json` — the current version and a list of updates (version, date, title, summary, changes)
+- `VERSION` — the current update version (same as `latest` in `updates.json`)
 - `UPGRADE.md` — what changed, in plain words
 - `coaching/` — generic coaching guidance only (voice, update habits, sharing rules)
 - `news/videos.json` — new videos from Easy Sourdough Baker
 - `news/recipes.json` — recipes Easy Sourdough Baker chooses to publish
 - `community/recipes.json` — recipes other bakers shared, after they are approved
 
-Nothing here holds personal information: no names, emails, handles, locations, or private notes.
-
 ## How a published copy updates
 
-1. Once a week, run `hive update`.
-2. It reads `VERSION` from the raw GitHub URL below. If the number is newer than the copy's last version, it fetches `UPGRADE.md`, the news files, and the coaching files.
-3. Coaching guidance in this repo may replace the copy's coaching guidance only.
-4. If there is a new version, a new video, or a new recipe, the copy tells its baker in one short line. If nothing is new, it stays quiet.
+1. On first setup, the copy asks the baker three separate questions: whether to join Hive Mind at all, whether to show and send each week's notes only after a yes, and whether to check this page weekly and apply an update only after a yes. If they say no to joining, the weekly share is skipped, but they can still opt in to updates.
+2. Once a week, if they opted in, the copy runs `hive weekly` to show a cleaned preview of what would be sent, and sends only with `hive weekly --yes` after the baker agrees. If they opted in to updates, it runs `hive update` to check this feed. That check reads `updates.json` (and falls back to `VERSION` if needed), prints anything newer, and applies nothing. After a yes, `hive update --yes` applies coaching guidance only.
+3. If an update asks for passwords, logins, codes, keys, account access, or personal info, the copy skips it and tells the baker.
+4. If there is a new version, a new video, or a new recipe, the copy tells its baker and waits for a yes. If nothing is new and nothing would be sent, it stays quiet.
 
 Raw feed:
 
 ```
-https://raw.githubusercontent.com/MarsHomestead/easy-sourdough-baker-updates/main/VERSION
+https://raw.githubusercontent.com/MarsHomestead/easy-sourdough-baker-updates/main/updates.json
 ```
 
 ## Community recipes
