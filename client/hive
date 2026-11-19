@@ -1,0 +1,786 @@
+#!/usr/bin/env python3
+"""Hive Mind client for Easy Sourdough Baker. Carries no secret.
+Usage:
+  hive lesson add TOPIC WRONG RIGHT
+  hive feedback add KIND TOPIC DID WANTED
+  hive feedback send KIND TEXT [--yes]
+  hive feedback read [WEEK]
+  hive preview | hive shared | hive on | hive off | hive status | hive auto
+  hive weekly          Print a cleaned preview of this week's share; send nothing
+  hive weekly --yes    Send that preview only after the baker says yes
+  hive update          Check the public feed; print anything newer; apply nothing
+  hive update --yes    Apply coaching guidance only, after the baker says yes; may refresh this client
+  hive news            Show unseen videos and recipes, then mark them seen
+  hive recipe share TITLE TEXT [--yes]
+  hive review          Owner: list pending community recipes and new feedback
+  hive approve ID      Owner: approve a pending recipe
+  hive publish         Owner: publish approved recipes to the public repo and bump VERSION
+"""
+import os, sys, json, re, sqlite3, hashlib, secrets, datetime, urllib.request, urllib.error, subprocess, base64, difflib, tempfile
+
+def repo_slug(val):
+    v = (val or "").strip().rstrip("/")
+    m = re.search(r"(?:https://github\.com/)?([A-Za-z0-9_.-]+/[A-Za-z0-9_.-]+)$", v)
+    return m.group(1) if m else ""
+
+def default_db():
+    if os.environ.get("HIVE_DB"):
+        return os.environ["HIVE_DB"]
+    if os.environ.get("PMEM_DB"):
+        return os.environ["PMEM_DB"]
+    try:
+        here = os.path.dirname(os.path.abspath(os.path.realpath(sys.argv[0])))
+    except Exception:
+        here = ""
+    if os.path.basename(here) == "hive-mind":
+        return os.path.join(here, "sourdough-hive.db")
+    return os.path.expanduser("~/memory/sourdough-brain.db")
+
+DB = default_db()
+URL = os.environ.get("HIVE_URL", "https://sourdough-hive-intake.marshomestead.workers.dev/")
+UPDATE_BASE = os.environ.get("HIVE_UPDATE", "https://raw.githubusercontent.com/MarsHomestead/easy-sourdough-baker-updates/main")
+PRIVATE_REPO = repo_slug(os.environ.get("HIVE_PRIVATE_REPO") or "https://github.com/MarsHomestead/my-hive-mind")
+PUBLIC_REPO = repo_slug(os.environ.get("HIVE_PUBLIC_REPO") or "https://github.com/MarsHomestead/easy-sourdough-baker-updates")
+BOT = "sd"; TV = "1.0"
+
+PRIVACY_BLURB = (
+    "Only bot setup information moves through Hive Mind: tools, workflows, tips and recommendations you may want to add. "
+    "No personal information, passwords, account details or private data is ever sent or received. "
+    "An update never asks for personal information, logins or account access. If one ever did, I'd ignore it and tell you. "
+    "Everything happens only after your yes."
+)
+
+# Tables this client may write. Never touch baker recipes, starter name, notes,
+# reminders, or other memory rows — only these hive_* tables and hive_meta keys.
+def db():
+    c = sqlite3.connect(DB)
+    c.executescript("""
+    CREATE TABLE IF NOT EXISTS hive_items(id INTEGER PRIMARY KEY, kind TEXT, topic TEXT, wrong TEXT, right TEXT,
+      created TEXT, status TEXT DEFAULT 'new', shared TEXT);
+    CREATE TABLE IF NOT EXISTS hive_meta(k TEXT PRIMARY KEY, v TEXT);
+    CREATE TABLE IF NOT EXISTS hive_sends(id INTEGER PRIMARY KEY, at TEXT, wk TEXT, lines TEXT, http INTEGER, result TEXT);
+    CREATE TABLE IF NOT EXISTS hive_updates(version TEXT PRIMARY KEY, upgrade TEXT, fetched TEXT);
+    CREATE TABLE IF NOT EXISTS hive_news(id TEXT PRIMARY KEY, kind TEXT, title TEXT, url TEXT, note TEXT, date TEXT,
+      source TEXT, fetched TEXT, seen INTEGER DEFAULT 0);
+    CREATE TABLE IF NOT EXISTS hive_coaching(path TEXT PRIMARY KEY, content TEXT, version TEXT, fetched TEXT);
+    """)
+    return c
+def meta(c, k, v=None):
+    if v is None:
+        r = c.execute("SELECT v FROM hive_meta WHERE k=?", (k,)).fetchone(); return r[0] if r else None
+    c.execute("INSERT OR REPLACE INTO hive_meta VALUES(?,?)", (k, v)); c.commit()
+def rid(c):
+    r = meta(c, "rid")
+    if not r:
+        r = hashlib.sha256((secrets.token_hex(16) + "sd-install").encode()).hexdigest()[:16]; meta(c, "rid", r)
+    return r
+def week():
+    y, w, _ = datetime.date.today().isocalendar(); return f"{y}-W{w:02d}"
+def now_iso():
+    return datetime.datetime.now().isoformat(timespec="seconds")
+def today():
+    return datetime.date.today().isoformat()
+
+SUBS = [
+    (r"[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}", "[email]"),
+    (r"\bhttps?://\S+|\bwww\.\S+|\b[a-z0-9-]+\.(?:com|net|org|io|dev|co|app|ai|me|xyz|gg|ly)\b\S*", "[link]"),
+    (r"\b(gh[pousr]_[A-Za-z0-9]{10,}|github_pat_\w+|sk-[A-Za-z0-9]{10,}|xox[abprs]-[\w-]+|AKIA[0-9A-Z]{16}|eyJ[\w-]+\.[\w-]+(\.[\w-]+)?)", "[key]"),
+    (r"\b[A-Za-z0-9_\-]{24,}\b", "[key]"),
+    (r"(~|\.{0,2})?/(?:[\w.-]+/)+[\w.-]*|[A-Za-z]:\\\S+", "[path]"),
+    (r"(\+?\d[\s().-]?){7,}\d", "[phone]"),
+    (r"\b\d+\s+[A-Z][a-z]+\s+(St|Street|Ave|Avenue|Rd|Road|Blvd|Dr|Drive|Ln|Lane|Ct|Way|Pl)\b\.?", "[address]"),
+    (r"(^|[^\w])@\w{2,}", r"\1[handle]"),
+    (r"\b\d{5,}\b", "[number]"),
+    (r"\b(pass(word)?|pwd|passcode|pin)\s*[:=]\s*\S+", "[secret]"),
+]
+LEFT = re.compile(r"@|https?:|www\.|\.com\b|\d{5,}|[A-Za-z0-9_\-]{24,}", re.I)
+def clean(s, n=150):
+    s = (s or "").strip()
+    for p, r in SUBS: s = re.sub(p, r, s, flags=re.I)
+    return s[:n]
+
+def pending(c):
+    out = []
+    for i, k, t, w, r in c.execute("SELECT id,kind,topic,wrong,right FROM hive_items WHERE status='new' AND kind!='feedback' ORDER BY id LIMIT 20"):
+        t, w, r = clean(t), clean(w), clean(r)
+        if not (t and w and r) or any(LEFT.search(x) for x in (t, w, r)):
+            c.execute("UPDATE hive_items SET status='dropped' WHERE id=?", (i,)); continue
+        out.append((i, {"v": 2, "b": BOT, "k": k, "t": t, "w": w, "r": r, "n": 1, "tv": TV, "rid": rid(c),
+                        "h": hashlib.sha256(f"{k}|{t}|{w}|{r}".encode()).hexdigest()[:12], "wk": week()}))
+    c.commit(); return out
+
+def post_json(url, obj):
+    body = json.dumps(obj).encode()
+    req = urllib.request.Request(url, data=body, headers={"content-type": "application/json", "User-Agent": "hive-client"}, method="POST")
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r: return r.status, r.read().decode(), body
+    except urllib.error.HTTPError as e: return e.code, e.read().decode(), body
+
+def raw_get(path):
+    base = UPDATE_BASE.rstrip("/")
+    rel = path.lstrip("/")
+    if base.startswith("file://") or base.startswith("/"):
+        root = base[7:] if base.startswith("file://") else base
+        fp = os.path.join(root, rel)
+        try:
+            with open(fp, encoding="utf-8") as f:
+                return f.read(), 200
+        except FileNotFoundError:
+            return "", 404
+        except OSError as e:
+            return str(e), 0
+    req = urllib.request.Request(base + "/" + rel, headers={"User-Agent": "hive-client"})
+    try:
+        with urllib.request.urlopen(req, timeout=30) as r: return r.read().decode(), r.status
+    except urllib.error.HTTPError as e:
+        return (e.read().decode() if e.fp else ""), e.code
+    except urllib.error.URLError as e:
+        return str(e.reason), 0
+
+def ver_tuple(s):
+    parts = []
+    for p in re.split(r"[^0-9]+", (s or "").strip()):
+        if p.isdigit(): parts.append(int(p))
+    return tuple(parts or [0])
+
+def bump_patch(s):
+    t = list(ver_tuple(s) or [0, 0, 0])
+    while len(t) < 3: t.append(0)
+    t[-1] += 1
+    return ".".join(str(x) for x in t)
+
+def news_items(blob, kind, source):
+    if not blob: return []
+    try: data = json.loads(blob)
+    except Exception: return []
+    rows = data.get("items", data) if isinstance(data, dict) else data
+    if not isinstance(rows, list): return []
+    out = []
+    for it in rows:
+        if not isinstance(it, dict): continue
+        nid = str(it.get("id") or hashlib.sha256(json.dumps(it, sort_keys=True).encode()).hexdigest()[:16])
+        out.append({
+            "id": nid, "kind": it.get("kind") or kind, "title": it.get("title") or "",
+            "url": it.get("url") or "", "note": it.get("note") or it.get("text") or "",
+            "date": it.get("date") or "", "source": source,
+        })
+    return out
+
+def baker_note(version, new_news):
+    videos = [n for n in new_news if n["kind"] == "video"]
+    recipes = [n for n in new_news if n["kind"] in ("recipe", "community")]
+    bits = [f"There's a new Easy Sourdough Baker update ({version})!"]
+    if videos:
+        titles = ", ".join(v["title"] for v in videos[:3] if v["title"])
+        bits.append(f"New video{'s' if len(videos) != 1 else ''} you can watch: {titles}." if titles else "There's a new video to watch.")
+    if recipes:
+        titles = ", ".join(r["title"] for r in recipes[:3] if r["title"])
+        bits.append(f"New recipe{'s' if len(recipes) != 1 else ''} to try: {titles}." if titles else "There's a new recipe to try.")
+    if not videos and not recipes:
+        bits.append("Coaching guidance was refreshed. Your own recipes, starter name, and notes were left alone.")
+    return " ".join(bits)
+
+# Drop reassuring "never asks / ignore it" sentences so our own privacy wording
+# is not treated as a request for secrets.
+REASSURE_SENT = re.compile(
+    r"[^.!?\n]*\b(?:never|do not|don't|does not|doesn't|not to|ignores?|ignore it|"
+    r"i['’]d ignore|would ignore|is ever sent|are ever sent|is ever received|are ever received)\b"
+    r"[^.!?\n]*(?:password|login|account access|personal (?:info|information)|private data|"
+    r"account details|credentials?)[^.!?\n]*[.!?]?",
+    re.I,
+)
+UNSAFE_ASK = re.compile(
+    r"\b(?:"
+    r"ask(?:ing)?(?:\s+\w+){0,8}\s+for\s+(?:their\s+|your\s+|the\s+(?:owner'?s?|baker'?s?|user'?s?)\s+)?"
+    r"(?:passwords?|passcodes?|passphrases?|logins?|credentials?|pins?|otps?|2fa|"
+    r"verification\s+codes?|one[- ]time\s+codes?|api\s*keys?|access\s+tokens?|secret\s+keys?|"
+    r"private\s+keys?|account\s+access|account\s+details|personal\s+(?:info|information|data)|"
+    r"ssns?|social\s+security|credit\s+cards?|bank\s+accounts?|email\s+passwords?)"
+    r"|"
+    r"(?:enter|type|paste|provide|share|send|give|tell\s+me|hand\s+over)\s+(?:me\s+)?"
+    r"(?:your\s+|their\s+|the\s+(?:owner'?s?|baker'?s?)\s+)?"
+    r"(?:passwords?|passcodes?|passphrases?|logins?|credentials?|pins?|one[- ]time\s+codes?|"
+    r"verification\s+codes?|api\s*keys?|access\s+tokens?|secret\s+keys?|private\s+keys?|"
+    r"account\s+(?:number|password|login|access)|ssns?|social\s+security|credit\s+cards?)"
+    r"|"
+    r"(?:what(?:'s|\s+is)\s+your\s+)(?:passwords?|logins?|pins?|passcodes?|credentials?)"
+    r"|"
+    r"(?:sign\s+in\s+with\s+your|log\s+in\s+with\s+your|connect\s+(?:your|their)\s+(?:bank\s+)?account)"
+    r")",
+    re.I,
+)
+
+def unsafe_reason(text):
+    t = REASSURE_SENT.sub(" ", text or "")
+    if UNSAFE_ASK.search(t):
+        return "asks for passwords, logins, codes, keys, account access, or personal info"
+    return None
+
+def load_feed():
+    blob, code = raw_get("updates.json")
+    if code == 200:
+        try:
+            data = json.loads(blob)
+        except Exception:
+            data = None
+        if isinstance(data, dict) and (data.get("latest") or data.get("updates")):
+            if not data.get("latest"):
+                vers = [str(u.get("version") or "") for u in (data.get("updates") or []) if isinstance(u, dict)]
+                data["latest"] = max(vers, key=ver_tuple) if vers else "0.0.0"
+            return data
+    body, vcode = raw_get("VERSION")
+    if vcode != 200:
+        return None
+    version = body.strip().splitlines()[0].strip() if body.strip() else "0.0.0"
+    return {"bot": "easy-sourdough-baker", "latest": version,
+            "updates": [{"version": version, "date": "", "title": "", "summary": "", "changes": []}]}
+
+def newer_updates(feed, local):
+    out = []
+    for u in feed.get("updates") or []:
+        if not isinstance(u, dict):
+            continue
+        v = str(u.get("version") or "")
+        if v and ver_tuple(v) > ver_tuple(local):
+            out.append(u)
+    out.sort(key=lambda u: ver_tuple(str(u.get("version") or "")))
+    return out
+
+def collect_new_news(c):
+    found = []
+    for path, kind, source in (
+        ("news/videos.json", "video", "videos"),
+        ("news/recipes.json", "recipe", "recipes"),
+        ("community/recipes.json", "community", "community"),
+    ):
+        blob, ncode = raw_get(path)
+        if ncode != 200:
+            continue
+        for it in news_items(blob, kind, source):
+            exists = c.execute("SELECT 1 FROM hive_news WHERE id=?", (it["id"],)).fetchone()
+            if not exists:
+                found.append(it)
+    return found
+
+def format_update_list(newer, latest, local, new_news):
+    lines = [PRIVACY_BLURB, ""]
+    if newer:
+        lines.append("Newer updates:")
+        for u in newer:
+            v = u.get("version") or ""
+            date = u.get("date") or ""
+            title = u.get("title") or ""
+            summary = u.get("summary") or ""
+            head = f"  {v}" + (f" — {date}" if date else "")
+            if title:
+                head += f"  {title}"
+            lines.append(head)
+            if summary:
+                lines.append(f"    {summary}")
+            for ch in u.get("changes") or []:
+                if ch:
+                    lines.append(f"    - {ch}")
+    elif ver_tuple(str(latest or "")) > ver_tuple(local):
+        lines.append(f"Newer version: {latest}")
+    videos = [n for n in new_news if n["kind"] == "video"]
+    recipes = [n for n in new_news if n["kind"] in ("recipe", "community")]
+    if videos:
+        titles = ", ".join(v["title"] or v["id"] for v in videos)
+        lines.append("New videos: " + titles)
+    if recipes:
+        titles = ", ".join(r["title"] or r["id"] for r in recipes)
+        lines.append("New recipes: " + titles)
+    if not newer and ver_tuple(str(latest or "")) <= ver_tuple(local) and not videos and not recipes:
+        return None
+    return "\n".join(lines).rstrip()
+
+CLIENT_MARK = "Hive Mind client for Easy Sourdough Baker"
+
+def refresh_client():
+    body, code = raw_get("client/hive")
+    if code != 200 or not body:
+        return None
+    if not body.lstrip().startswith("#!/usr/bin/env python3") or CLIENT_MARK not in body:
+        return "Skipped client refresh: the downloaded file did not look like the Easy Sourdough Baker client."
+    if unsafe_reason(body):
+        return "Skipped client/hive: asks for passwords, logins, codes, keys, account access, or personal info. I did not replace the client."
+    try:
+        dest = os.path.realpath(sys.argv[0])
+    except Exception:
+        return None
+    if not dest or not os.path.isfile(dest):
+        return None
+    new = body if body.endswith("\n") else body + "\n"
+    try:
+        with open(dest, encoding="utf-8") as f:
+            current = f.read()
+    except OSError:
+        return None
+    if current == new:
+        return None
+    d = os.path.dirname(dest) or "."
+    try:
+        fd, tmp = tempfile.mkstemp(prefix=".hive.", suffix=".tmp", dir=d, text=True)
+        try:
+            with os.fdopen(fd, "w", encoding="utf-8") as f:
+                f.write(new)
+            os.chmod(tmp, os.stat(dest).st_mode | 0o111)
+            os.replace(tmp, dest)
+        except Exception:
+            try:
+                os.unlink(tmp)
+            except OSError:
+                pass
+            raise
+        return "The hive client file was refreshed."
+    except OSError:
+        return "Could not refresh the hive client file."
+
+def cmd_update(c, yes=False):
+    feed = load_feed()
+    if not feed:
+        print("could not read the update feed"); return 1
+    version = str(feed.get("latest") or "").strip() or "0.0.0"
+    local = meta(c, "update_version") or "0.0.0"
+    newer = newer_updates(feed, local)
+    new_news = collect_new_news(c)
+    listing = format_update_list(newer, version, local, new_news)
+    if listing is None:
+        if yes:
+            msg = refresh_client()
+            if msg:
+                print(msg)
+                return 0
+        print("You're up to date. No new videos or recipes.")
+        return 0
+    print(listing)
+    skip_notes = []
+    for u in newer:
+        reason = unsafe_reason(" ".join([
+            str(u.get("title") or ""), str(u.get("summary") or ""),
+            " ".join(str(ch) for ch in (u.get("changes") or [])),
+        ]))
+        if reason:
+            skip_notes.append(f"Update {u.get('version')}: {reason}. I would skip it.")
+    for it in new_news:
+        reason = unsafe_reason(" ".join([it.get("title") or "", it.get("note") or ""]))
+        if reason:
+            skip_notes.append(f"News item '{it.get('title') or it.get('id')}': {reason}. I would skip it.")
+    if not yes:
+        if skip_notes:
+            print("\n".join(skip_notes))
+        print("Nothing was applied. Re-run with --yes only after the baker says yes. "
+              "Coaching guidance only; their own recipes, starter name, notes, and reminders stay as they are.")
+        return 0
+    fetched = now_iso()
+    upgrade, ucode = raw_get("UPGRADE.md")
+    upgrade_text = upgrade if ucode == 200 else ""
+    if upgrade_text and unsafe_reason(upgrade_text):
+        skip_notes.append("UPGRADE.md asked for passwords, logins, codes, keys, account access, or personal info. I skipped it.")
+        upgrade_text = ""
+    c.execute("INSERT OR REPLACE INTO hive_updates(version, upgrade, fetched) VALUES(?,?,?)",
+              (version, upgrade_text, fetched))
+    applied_news = []
+    for it in new_news:
+        reason = unsafe_reason(" ".join([it.get("title") or "", it.get("note") or ""]))
+        if reason:
+            skip_notes.append(f"Skipped news item '{it.get('title') or it.get('id')}': {reason}.")
+            continue
+        c.execute(
+            "INSERT OR IGNORE INTO hive_news(id,kind,title,url,note,date,source,fetched,seen) VALUES(?,?,?,?,?,?,?,?,0)",
+            (it["id"], it["kind"], it["title"], it["url"], it["note"], it["date"], it["source"], fetched),
+        )
+        applied_news.append(it)
+    manifest, mcode = raw_get("coaching/MANIFEST.json")
+    paths = []
+    if mcode == 200:
+        try: paths = list(json.loads(manifest))
+        except Exception: paths = []
+    if not paths: paths = ["GUIDE.md", "INSTRUCTIONS.md"]
+    for name in paths:
+        if not isinstance(name, str) or ".." in name or name.startswith("/"): continue
+        rel = name if name.startswith("coaching/") else "coaching/" + name
+        content, cc = raw_get(rel)
+        if cc != 200:
+            continue
+        reason = unsafe_reason(content)
+        if reason:
+            skip_notes.append(f"Skipped {rel}: {reason}. I did not apply it.")
+            continue
+        c.execute("INSERT OR REPLACE INTO hive_coaching(path, content, version, fetched) VALUES(?,?,?,?)",
+                  (rel, content, version, fetched))
+    meta(c, "update_version", version)
+    c.commit()
+    print(baker_note(version, applied_news))
+    if skip_notes:
+        print("\n".join(skip_notes))
+    if yes:
+        msg = refresh_client()
+        if msg:
+            print(msg)
+    return 0
+
+def cmd_weekly(c, yes=False):
+    items = pending(c)
+    preview = [o for _, o in items]
+    if not yes:
+        if not preview:
+            print("nothing to send this week")
+            return 0
+        print(json.dumps({
+            "would_send": preview,
+            "note": "Only cleaned bot setup lessons would be sent: tools, workflows, tips and recommendations. "
+                    "No personal information, passwords, account details or private data is ever sent or received. "
+                    "Show this exact text to the baker. Re-run with --yes only after they say yes. Nothing is recorded as sent.",
+        }, indent=1))
+        return 0
+    if (meta(c, "sharing") or "off") != "on":
+        print("sharing is off; nothing sent"); return 0
+    if meta(c, "last_wk") == week():
+        print("already sent this week"); return 0
+    if not items:
+        print("nothing to send"); return 0
+    code, res, body = post_json(URL, {"batch": [o for _, o in items]})
+    c.execute("INSERT INTO hive_sends(at,wk,lines,http,result) VALUES(?,?,?,?,?)", (now_iso(), week(), body.decode(), code, res))
+    if code == 200 or code == 429:
+        meta(c, "last_wk", week())
+    if code == 200:
+        c.executemany("UPDATE hive_items SET status='sent', shared=? WHERE id=?", [(now_iso(), i) for i, _ in items])
+    c.commit(); print(code, res); return 0 if code == 200 else 1
+
+def cmd_news(c):
+    rows = list(c.execute("SELECT id,kind,title,url,note,date,source FROM hive_news WHERE seen=0 ORDER BY date, id"))
+    if not rows:
+        print("No new videos or recipes.")
+        return 0
+    for i, kind, title, url, note, date, source in rows:
+        label = {"video": "Video", "recipe": "Recipe", "community": "Community recipe"}.get(kind, kind)
+        line = f"{label}: {title}" + (f" ({date})" if date else "")
+        if url: line += f"\n  {url}"
+        if note and note != title: line += "\n  " + (note if len(note) < 280 else note[:277] + "...")
+        print(line)
+    c.executemany("UPDATE hive_news SET seen=1 WHERE id=?", [(r[0],) for r in rows])
+    c.commit()
+    return 0
+
+def recipe_payload(c, title, text):
+    title_c, text_c = clean(title, 80), clean(text, 3000)
+    rec_id = hashlib.sha256(f"{title_c}|{text_c}|{rid(c)}|{week()}".encode()).hexdigest()[:16]
+    return title_c, text_c, {
+        "v": 1, "b": BOT, "title": title_c, "text": text_c, "tv": TV,
+        "rid": rid(c), "id": rec_id, "wk": week(),
+    }
+
+def cmd_recipe_share(c, a):
+    yes = a[-1] == "--yes"
+    args = a[:-1] if yes else a
+    if len(args) != 2:
+        print("usage: hive recipe share TITLE TEXT [--yes]"); return 2
+    title_c, text_c, item = recipe_payload(c, args[0], args[1])
+    if not title_c or not text_c:
+        print("title and text can't be empty after cleaning"); return 1
+    if not yes:
+        print(json.dumps({
+            "would_send": {"title": title_c, "text": text_c},
+            "note": "Show this exact text to the baker. Re-run with --yes only after they say yes. Nothing is public until it is approved.",
+        }, indent=1))
+        return 0
+    if title_c != args[0].strip()[:80] or text_c != args[1].strip()[:3000]:
+        print("text changed when cleaned; ask the baker to send it without private details"); return 1
+    if LEFT.search(title_c) or LEFT.search(text_c):
+        print("text still looks like it has private details; not sent"); return 1
+    code, res, body = post_json(URL.rstrip("/") + "/recipe", item)
+    c.execute("INSERT INTO hive_sends(at,wk,lines,http,result) VALUES(?,?,?,?,?)",
+              (now_iso(), week(), body.decode(), code, res)); c.commit()
+    print(code, res); return 0 if code == 200 else 1
+
+OWNER_UNAVAILABLE = "This command is for the bot's creator and needs GitHub access that this copy does not have. Nothing was changed."
+
+def gh_api(*args, inp=None):
+    try:
+        r = subprocess.run(["gh", "api", *args], capture_output=True, text=True, input=inp)
+        return r.returncode, r.stdout, r.stderr
+    except FileNotFoundError:
+        return 1, "", "gh is not available"
+    except OSError:
+        return 1, "", "could not run gh"
+
+def gh_err(err):
+    e = re.sub(
+        r"\b(gh[pousr]_[A-Za-z0-9]+|github_pat_\w+|sk-[A-Za-z0-9]+|xox[abprs]-[\w-]+|AKIA[0-9A-Z]{16}|eyJ[\w-]+\.[\w-]+(?:\.[\w-]+)?)\b",
+        "[key]",
+        err or "",
+    )
+    e = e.strip()
+    return e[:240] if e else "github access is not available"
+
+def has_owner_access():
+    if not PRIVATE_REPO:
+        return False
+    code, _, _ = gh_api(f"repos/{PRIVATE_REPO}/contents")
+    return code == 0
+
+def gh_get(repo, path):
+    code, out, err = gh_api(f"repos/{repo}/contents/{path}")
+    if code:
+        return None, None, err
+    j = json.loads(out)
+    content = base64.b64decode(j.get("content") or "").decode()
+    return content, j.get("sha"), None
+
+def gh_put(repo, path, content, message, sha=None):
+    body = {"message": message, "content": base64.b64encode(content.encode()).decode()}
+    if sha: body["sha"] = sha
+    code, out, err = gh_api(f"repos/{repo}/contents/{path}", "-X", "PUT", "--input", "-", inp=json.dumps(body))
+    return code, out, err
+
+def gh_list(repo, folder):
+    code, out, err = gh_api(f"repos/{repo}/contents/{folder}")
+    if code: return []
+    try: return json.loads(out)
+    except Exception: return []
+
+def load_review():
+    content, sha, err = gh_get(PRIVATE_REPO, "pending-recipes/review.json")
+    if content is None:
+        return {"recipes": {}}, None
+    try: data = json.loads(content)
+    except Exception: data = {"recipes": {}}
+    if "recipes" not in data or not isinstance(data["recipes"], dict):
+        data = {"recipes": {}}
+    return data, sha
+
+def load_pending_recipes():
+    items = []
+    for f in gh_list(PRIVATE_REPO, "pending-recipes"):
+        name = f.get("name") or ""
+        if not name.endswith(".jsonl"): continue
+        content, _, _ = gh_get(PRIVATE_REPO, f["path"])
+        for line in (content or "").splitlines():
+            if not line.strip(): continue
+            try: o = json.loads(line)
+            except Exception: continue
+            if o.get("id"): items.append(o)
+    return items
+
+def cmd_review():
+    if not has_owner_access():
+        print(OWNER_UNAVAILABLE); return 1
+    review, _ = load_review()
+    pending = []
+    approved = []
+    for o in load_pending_recipes():
+        st = (review["recipes"].get(o["id"]) or {}).get("status") or "pending"
+        o["_status"] = st
+        if st == "pending": pending.append(o)
+        elif st == "approved": approved.append(o)
+    print("Pending community recipes:")
+    if not pending: print("  (none)")
+    for o in pending:
+        text = o.get("text") or ""
+        preview = text if len(text) < 240 else text[:237] + "..."
+        print(f"  {o['id']}  {o.get('title','')}\n    {preview}")
+    if approved:
+        print("Approved, not yet published:")
+        for o in approved:
+            print(f"  {o['id']}  {o.get('title','')}")
+    print("Feedback-driven improvements:")
+    fb_files = [f for f in gh_list(PRIVATE_REPO, "feedback") if (f.get("name") or "").endswith(".jsonl")]
+    found = 0
+    for f in sorted(fb_files, key=lambda x: x.get("name") or ""):
+        content, _, _ = gh_get(PRIVATE_REPO, f["path"])
+        for line in (content or "").splitlines():
+            if not line.strip(): continue
+            try: o = json.loads(line)
+            except Exception: continue
+            if o.get("b") and o.get("b") != BOT: continue
+            found += 1
+            kind = o.get("kind") or "other"
+            text = o.get("text") or ""
+            print(f"  [{kind}] {text}")
+    if not found:
+        print("  (none)")
+    return 0
+
+def cmd_approve(rid_or_id):
+    if not has_owner_access():
+        print(OWNER_UNAVAILABLE); return 1
+    items = {o["id"]: o for o in load_pending_recipes()}
+    if rid_or_id not in items:
+        print("no pending recipe with that id"); return 1
+    review, sha = load_review()
+    st = (review["recipes"].get(rid_or_id) or {}).get("status")
+    if st == "published":
+        print("already published", rid_or_id); return 1
+    review["recipes"][rid_or_id] = {"status": "approved", "at": now_iso(), "title": items[rid_or_id].get("title") or ""}
+    code, _, err = gh_put(PRIVATE_REPO, "pending-recipes/review.json", json.dumps(review, indent=2) + "\n",
+                          f"hive: approve recipe {rid_or_id}", sha)
+    if code:
+        print("could not save approval:", gh_err(err)); return 1
+    print("approved", rid_or_id, items[rid_or_id].get("title") or "")
+    return 0
+
+def cmd_publish():
+    if not has_owner_access():
+        print(OWNER_UNAVAILABLE); return 1
+    review, sha = load_review()
+    pending = {o["id"]: o for o in load_pending_recipes()}
+    to_pub = []
+    for i, meta_r in review["recipes"].items():
+        if (meta_r or {}).get("status") == "approved" and i in pending:
+            to_pub.append(pending[i])
+    if not to_pub:
+        print("nothing approved to publish"); return 0
+    content, vsha, err = gh_get(PUBLIC_REPO, "VERSION")
+    if content is None:
+        print("could not read public VERSION:", gh_err(err) if err else "missing repo"); return 1
+    old_v = content.strip().splitlines()[0].strip()
+    new_v = bump_patch(old_v)
+    recipes, rsha, rerr = gh_get(PUBLIC_REPO, "community/recipes.json")
+    if recipes is None:
+        print("could not read community/recipes.json:", gh_err(rerr)); return 1
+    try: data = json.loads(recipes)
+    except Exception: data = {"version": 1, "items": []}
+    if not isinstance(data, dict): data = {"version": 1, "items": []}
+    items = data.setdefault("items", [])
+    have = {it.get("id") for it in items if isinstance(it, dict)}
+    added = []
+    for o in to_pub:
+        if o["id"] in have: continue
+        items.append({
+            "id": o["id"],
+            "title": o.get("title") or "",
+            "text": o.get("text") or "",
+            "note": "Shared by a baker in the community.",
+            "date": today(),
+        })
+        added.append(o)
+        have.add(o["id"])
+    if not added:
+        print("those recipes are already in the public list"); return 0
+    data["updated"] = today()
+    upgrade, usha, uerr = gh_get(PUBLIC_REPO, "UPGRADE.md")
+    if upgrade is None:
+        print("could not read UPGRADE.md:", gh_err(uerr)); return 1
+    titles = ", ".join(o.get("title") or o["id"] for o in added)
+    section = f"## {new_v} — {today()}\n\n- Added community recipe{'s' if len(added) != 1 else ''}: {titles}.\n\n"
+    if re.search(rf"^## {re.escape(new_v)} ", upgrade, re.M):
+        print("UPGRADE.md already has", new_v); return 1
+    if upgrade.startswith("# "):
+        parts = upgrade.split("\n", 1)
+        rest = parts[1].lstrip("\n") if len(parts) > 1 else ""
+        upgrade = parts[0] + "\n\n" + section + rest
+    else:
+        upgrade = section + upgrade
+    feed, fsha, ferr = gh_get(PUBLIC_REPO, "updates.json")
+    if feed is None:
+        fdata = {"bot": "easy-sourdough-baker", "latest": new_v, "updates": []}
+        fsha = None
+    else:
+        try: fdata = json.loads(feed)
+        except Exception: fdata = {"bot": "easy-sourdough-baker", "latest": new_v, "updates": []}
+        if not isinstance(fdata, dict):
+            fdata = {"bot": "easy-sourdough-baker", "latest": new_v, "updates": []}
+    fdata["bot"] = fdata.get("bot") or "easy-sourdough-baker"
+    fdata["latest"] = new_v
+    ups = fdata.setdefault("updates", [])
+    if not any(isinstance(u, dict) and str(u.get("version") or "") == new_v for u in ups):
+        ups.append({
+            "version": new_v,
+            "date": today(),
+            "title": "New community recipes",
+            "summary": f"Added community recipe{'s' if len(added) != 1 else ''}: {titles}.",
+            "changes": [f"Added community recipe: {o.get('title') or o['id']}" for o in added],
+        })
+    files = [
+        ("community/recipes.json", json.dumps(data, indent=2) + "\n", rsha, "community recipes"),
+        ("VERSION", new_v + "\n", vsha, "VERSION"),
+        ("UPGRADE.md", upgrade if upgrade.endswith("\n") else upgrade + "\n", usha, "UPGRADE.md"),
+        ("updates.json", json.dumps(fdata, indent=2) + "\n", fsha, "updates.json"),
+    ]
+    for path, body, fsha_f, label in files:
+        code, _, err = gh_put(PUBLIC_REPO, path, body, f"hive: publish community recipes {new_v}", fsha_f)
+        if code:
+            print(f"could not update {label}:", gh_err(err)); return 1
+    for o in added:
+        review["recipes"][o["id"]] = {"status": "published", "at": now_iso(), "title": o.get("title") or "", "version": new_v}
+    code, _, err = gh_put(PRIVATE_REPO, "pending-recipes/review.json", json.dumps(review, indent=2) + "\n",
+                          f"hive: published recipes in {new_v}", sha)
+    if code:
+        print("published to the public repo, but could not mark them published in the private repo:", gh_err(err))
+        return 1
+    print(f"published {len(added)} recipe{'s' if len(added) != 1 else ''} in {new_v}: {titles}")
+    return 0
+
+def main(a):
+    c = db()
+    if a[:2] == ["lesson", "add"] and len(a) == 5:
+        c.execute("INSERT INTO hive_items(kind,topic,wrong,right,created) VALUES('lesson',?,?,?,?)", (*a[2:5], now_iso())); c.commit(); print("saved")
+    elif a[:2] == ["feedback", "add"] and len(a) == 6:
+        kind = a[2] if a[2] in ("correction", "request", "declined", "broken", "workaround") else "request"
+        c.execute("INSERT INTO hive_items(kind,topic,wrong,right,created) VALUES(?,?,?,?,?)", (kind, a[3], a[4], a[5], now_iso())); c.commit(); print("saved")
+    elif a[:2] == ["feedback", "send"] and len(a) in (4, 5):
+        kind = a[2] if a[2] in ("bug", "request", "praise", "other") else "other"
+        text = clean(a[3], 500)
+        if len(a) == 4 or a[4] != "--yes":
+            print(json.dumps({"would_send": {"kind": kind, "text": text}, "note": "Show this exact text to the person who wrote it. Re-run with --yes only after they say yes."})); return 0
+        item = {"v": 1, "b": BOT, "kind": kind, "text": a[3][:500], "tv": TV, "rid": rid(c)}
+        if text != a[3].strip()[:500]:
+            print("text changed when cleaned; ask the person to send it without private details"); return 1
+        code, res, body = post_json(URL.rstrip("/") + "/feedback", item)
+        c.execute("INSERT INTO hive_sends(at,wk,lines,http,result) VALUES(?,?,?,?,?)", (now_iso(), week(), body.decode(), code, res)); c.commit()
+        print(code, res); return 0 if code == 200 else 1
+    elif a[:2] == ["feedback", "read"]:
+        if not has_owner_access():
+            print(OWNER_UNAVAILABLE); return 1
+        wk = a[2] if len(a) > 2 else week()
+        content, _, err = gh_get(PRIVATE_REPO, f"feedback/{wk}.jsonl")
+        if content is None: print("no feedback file for", wk); return 0
+        items = [json.loads(l) for l in content.splitlines() if l.strip()]
+        groups = {"bug": [], "request": [], "praise": [], "other": []}
+        for it in items:
+            g = groups.setdefault(it.get("kind", "other"), [])
+            for e in g:
+                if difflib.SequenceMatcher(None, e["text"].lower(), it["text"].lower()).ratio() > 0.85: e["count"] += 1; break
+            else: g.append({"text": it["text"], "bot": it.get("b"), "count": 1})
+        print(json.dumps(groups, indent=1))
+    elif a == ["preview"]:
+        print(json.dumps({"batch": [o for _, o in pending(c)]}, indent=1))
+    elif a == ["shared"]:
+        for r in c.execute("SELECT at,wk,http,result,lines FROM hive_sends ORDER BY id"): print(json.dumps(dict(zip(["at", "wk", "http", "result", "lines"], r))))
+    elif a in (["on"], ["off"]):
+        meta(c, "sharing", a[0]); print("Hive Mind sharing", a[0])
+    elif a == ["status"]:
+        n = c.execute("SELECT count(*) FROM hive_items WHERE status='new'").fetchone()[0]
+        print(json.dumps({"sharing": meta(c, "sharing") or "off", "pending": n, "last_week_sent": meta(c, "last_wk"), "intake": URL, "update_version": meta(c, "update_version")}))
+    elif a == ["auto"]:
+        if (meta(c, "sharing") or "off") != "on": print("sharing is off; nothing sent"); return 0
+        if meta(c, "last_wk") == week(): print("already sent this week"); return 0
+        items = pending(c)
+        if not items: print("nothing to send"); return 0
+        code, res, body = post_json(URL, {"batch": [o for _, o in items]})
+        c.execute("INSERT INTO hive_sends(at,wk,lines,http,result) VALUES(?,?,?,?,?)", (now_iso(), week(), body.decode(), code, res))
+        if code == 200 or code == 429:
+            meta(c, "last_wk", week())
+        if code == 200:
+            c.executemany("UPDATE hive_items SET status='sent', shared=? WHERE id=?", [(now_iso(), i) for i, _ in items])
+        c.commit(); print(code, res); return 0 if code == 200 else 1
+    elif a[:1] == ["weekly"] and (len(a) == 1 or a == ["weekly", "--yes"]):
+        return cmd_weekly(c, yes=(len(a) == 2 and a[1] == "--yes"))
+    elif a[:1] == ["update"] and (len(a) == 1 or a == ["update", "--yes"]):
+        return cmd_update(c, yes=(len(a) == 2 and a[1] == "--yes"))
+    elif a == ["news"]:
+        return cmd_news(c)
+    elif a[:2] == ["recipe", "share"]:
+        return cmd_recipe_share(c, a[2:])
+    elif a == ["review"]:
+        return cmd_review()
+    elif a[:1] == ["approve"] and len(a) == 2:
+        return cmd_approve(a[1])
+    elif a == ["publish"]:
+        return cmd_publish()
+    else:
+        print(__doc__); return 2
+    return 0
+if __name__ == "__main__":
+    sys.exit(main(sys.argv[1:]))

@@ -1,6 +1,6 @@
 {
   "bot": "easy-sourdough-baker",
-  "latest": "1.1.0",
+  "latest": "1.1.1",
   "updates": [
     {
       "version": "1.0.0",
@@ -22,6 +22,18 @@
         "Ask before each weekly Hive Mind share, and send only after a yes.",
         "Ask before applying a public update, and apply coaching guidance only after a yes.",
         "An update that asks for passwords, logins, codes, keys, account access or personal info is skipped, and the baker is told."
+      ]
+    },
+    {
+      "version": "1.1.1",
+      "date": "2026-11-19",
+      "title": "Published copies install the hive client from this repo",
+      "summary": "The hive client now lives in this repo as client/hive, so a published copy can download it onto the baker's computer, keep its own database, and refresh the client when an update is applied.",
+      "changes": [
+        "Add client/hive and a short client README for published copies to install.",
+        "Install to ~/hive-mind/hive and use HIVE_DB=~/hive-mind/sourdough-hive.db.",
+        "hive update --yes may refresh the client file.",
+        "Creator-only commands fail harmlessly without GitHub access."
       ]
     }
   ]

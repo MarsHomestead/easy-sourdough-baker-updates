@@ -1,5 +1,12 @@
 # Easy Sourdough Baker updates
 
+## 1.1.1 — 2026-11-19
+
+- The hive client now lives in this repo as `client/hive`, so a published copy can install it on the baker's own computer.
+- Install it to `~/hive-mind/hive` and use `HIVE_DB=~/hive-mind/sourdough-hive.db`.
+- `hive update --yes` may refresh the client file as well as coaching guidance.
+- Creator-only commands (`hive review`, `hive approve`, `hive publish`) fail harmlessly if GitHub access is not available.
+
 ## 1.1.0 — 2026-11-19
 
 - Published copies ask their baker before sending this week's Hive Mind notes, and send only after a yes.

@@ -22,11 +22,12 @@ Nothing here holds personal information: no names, emails, handles, locations, o
 - `news/videos.json` — new videos from Easy Sourdough Baker
 - `news/recipes.json` — recipes Easy Sourdough Baker chooses to publish
 - `community/recipes.json` — recipes other bakers shared, after they are approved
+- `client/hive` — the Python client a published copy installs on the baker's computer (see `client/README.md`)
 
 ## How a published copy updates
 
-1. On first setup, the copy asks the baker three separate questions: whether to join Hive Mind at all, whether to show and send each week's notes only after a yes, and whether to check this page weekly and apply an update only after a yes. If they say no to joining, the weekly share is skipped, but they can still opt in to updates.
-2. Once a week, if they opted in, the copy runs `hive weekly` to show a cleaned preview of what would be sent, and sends only with `hive weekly --yes` after the baker agrees. If they opted in to updates, it runs `hive update` to check this feed. That check reads `updates.json` (and falls back to `VERSION` if needed), prints anything newer, and applies nothing. After a yes, `hive update --yes` applies coaching guidance only.
+1. On first setup, the copy installs `client/hive` to `~/hive-mind/hive` if it is missing, uses `HIVE_DB=~/hive-mind/sourdough-hive.db`, and asks the baker three separate questions: whether to join Hive Mind at all, whether to show and send each week's notes only after a yes, and whether to check this page weekly and apply an update only after a yes. If they say no to joining, the weekly share is skipped, but they can still opt in to updates.
+2. Once a week, if they opted in, the copy runs `~/hive-mind/hive weekly` to show a cleaned preview of what would be sent, and sends only with `~/hive-mind/hive weekly --yes` after the baker agrees. If they opted in to updates, it runs `~/hive-mind/hive update` to check this feed. That check reads `updates.json` (and falls back to `VERSION` if needed), prints anything newer, and applies nothing. After a yes, `hive update --yes` applies coaching guidance only and may refresh the client file.
 3. If an update asks for passwords, logins, codes, keys, account access, or personal info, the copy skips it and tells the baker.
 4. If there is a new version, a new video, or a new recipe, the copy tells its baker and waits for a yes. If nothing is new and nothing would be sent, it stays quiet.
 

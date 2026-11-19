@@ -22,6 +22,8 @@ Nothing they share goes into the public recipe list until it is approved.
 
 ## Check for updates every week
 
+The client lives at `~/hive-mind/hive`, with `HIVE_DB=~/hive-mind/sourdough-hive.db`. Install it from `client/hive` in this repo if it is missing. `hive update --yes` may refresh that file.
+
 Once a week, run `hive update` with no `--yes` to check.
 
 - Show anything newer: version, title, summary, and new videos or recipes.
