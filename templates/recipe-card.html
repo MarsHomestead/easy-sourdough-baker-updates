@@ -1,0 +1,387 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+<title>{{title}}</title>
+<style>
+  /* Shared structure and colors. Print keeps the original letter-card look.
+     Screen/tablet uses large type, high contrast, and one section at a time. */
+  @page {
+    size: letter;
+    margin: 0.5in 0.58in 0.52in 0.58in;
+  }
+  * { box-sizing: border-box; }
+  html, body {
+    margin: 0;
+    padding: 0;
+    background: #fff;
+    color: #24160e;
+    -webkit-print-color-adjust: exact;
+    print-color-adjust: exact;
+  }
+  body {
+    font-family: "Atkinson Hyperlegible", "Source Sans Pro", "Source Sans 3", sans-serif;
+  }
+  h1 {
+    font-family: Fraunces, "Source Serif Pro", serif;
+    font-weight: 600;
+    line-height: 1.05;
+    letter-spacing: -0.01em;
+    color: #5a2a10;
+    margin: 0 0 2pt;
+  }
+  .subtitle {
+    font-family: Fraunces, "Source Serif Pro", serif;
+    font-style: italic;
+    color: #7a4a22;
+    margin: 0 0 6pt;
+  }
+  .credit {
+    color: #5c4a3c;
+    margin: 0 0 9pt;
+  }
+  .credit a { color: #5a2a10; text-decoration: none; }
+  .batch {
+    background: #f4e3c8;
+    border: 2.4pt solid #8a4518;
+    border-radius: 7pt;
+    padding: 8pt 13pt 8pt;
+    margin: 0 0 10pt;
+  }
+  .batch h2 {
+    font-family: Fraunces, "Source Serif Pro", serif;
+    font-weight: 600;
+    color: #5a2a10;
+    margin: 0 0 2pt;
+  }
+  .batch .lede { color: #4a3224; margin: 0 0 7pt; }
+  .ings {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    column-gap: 18pt;
+    row-gap: 0;
+  }
+  .ing {
+    display: grid;
+    grid-template-columns: 8.6em 1fr;
+    gap: 8pt;
+    border-bottom: 1px dotted #c4a07a;
+    padding: 3.5pt 0;
+    align-items: baseline;
+  }
+  .ing.span { grid-column: 1 / -1; }
+  .ing .amt {
+    font-weight: 700;
+    color: #3a1c0c;
+    white-space: nowrap;
+  }
+  .batch .note {
+    margin: 7pt 0 0;
+    line-height: 1.3;
+    color: #3d2a1c;
+  }
+  h2.sec {
+    font-family: Fraunces, "Source Serif Pro", serif;
+    font-weight: 600;
+    color: #5a2a10;
+    border-bottom: 1.6pt solid #d2b48c;
+    margin: 11pt 0 6pt;
+    padding: 0 0 2pt;
+    page-break-after: avoid;
+    break-after: avoid;
+  }
+  .block { page-break-inside: auto; break-inside: auto; }
+  h2.sec + p, h2.sec + ol, h2.sec + div.folds {
+    page-break-before: avoid;
+    break-before: avoid;
+  }
+  .goal { margin: 0 0 6pt; color: #3a281c; }
+  ol.steps { margin: 0 0 7pt; padding-left: 1.35em; }
+  ol.steps li { margin: 0 0 4.5pt; padding-left: 0.15em; }
+  .warn { font-weight: 700; color: #5a2a10; }
+  .tips {
+    background: #f8f0e4;
+    border-left: 4pt solid #c07a32;
+    padding: 5pt 10pt 7pt 11pt;
+    margin: 0 0 2pt;
+    line-height: 1.32;
+  }
+  .tips .label {
+    font-weight: 700;
+    color: #5a2a10;
+    letter-spacing: 0.02em;
+    text-transform: uppercase;
+  }
+  .tips ul { margin: 3pt 0 0; padding-left: 1.1em; }
+  .tips li { margin: 0 0 2pt; }
+  .folds { display: flex; flex-direction: column; gap: 5pt; margin: 0 0 7pt; }
+  .fold {
+    border: 1.3pt solid #c9a070;
+    border-radius: 5pt;
+    padding: 6pt 9pt;
+    display: flex;
+    gap: 9pt;
+    align-items: flex-start;
+    background: #fffdf8;
+    page-break-inside: avoid;
+    break-inside: avoid;
+  }
+  .cb {
+    appearance: none;
+    -webkit-appearance: none;
+    width: 15pt;
+    height: 15pt;
+    border: 2pt solid #5a2a10;
+    border-radius: 2pt;
+    flex: 0 0 auto;
+    margin: 1.5pt 0 0;
+    background: #fff;
+    padding: 0;
+  }
+  .cb:checked {
+    background: #5a2a10;
+    box-shadow: inset 0 0 0 2.5pt #fffdf8;
+  }
+  .fold .num {
+    font-family: Fraunces, "Source Serif Pro", serif;
+    font-weight: 600;
+    color: #5a2a10;
+  }
+  .two-col { display: grid; grid-template-columns: 1fr 1fr; gap: 0 16pt; }
+  .aside {
+    background: #f6eee0;
+    border: 1.4pt solid #c9a070;
+    border-radius: 7pt;
+    padding: 8pt 12pt 9pt;
+    page-break-inside: avoid;
+    break-inside: avoid;
+    margin: 10pt 0 0;
+  }
+  .aside h2.sec { border-bottom-color: #c9a070; margin-top: 0; }
+  .aside ul, .history ul { margin: 0; padding-left: 1.15em; }
+  .aside li, .history li { margin: 0 0 4pt; }
+  .history { margin: 10pt 0 0; }
+  .why { font-style: italic; }
+  .page-break { page-break-before: always; break-before: page; }
+  .cool { page-break-inside: avoid; break-inside: avoid; }
+  .notes {
+    page-break-inside: avoid;
+    break-inside: avoid;
+    margin-top: 8pt;
+  }
+  .line { border-bottom: 1pt solid #cbb9a4; height: 18pt; }
+  .links {
+    color: #5c4a3c;
+    margin-top: 10pt;
+    border-top: 1pt solid #e0d0bc;
+    padding-top: 7pt;
+    line-height: 1.4;
+  }
+  .links a { color: #5a2a10; text-decoration: none; }
+  strong { font-weight: 700; }
+  .empty { display: none; }
+  .sec-nav { display: none; }
+
+  @media print {
+    body { font-size: 12.75pt; line-height: 1.32; }
+    h1 { font-size: 24.5pt; }
+    .subtitle { font-size: 13pt; }
+    .credit, .links { font-size: 9.4pt; }
+    .batch h2 { font-size: 14.5pt; }
+    .batch .lede { font-size: 10.5pt; }
+    .ing .amt { font-size: 14.5pt; }
+    .ing .what { font-size: 12.5pt; }
+    .batch .note { font-size: 11pt; }
+    h2.sec { font-size: 15.25pt; }
+    .goal { font-size: 11.5pt; }
+    .tips { font-size: 11pt; }
+    .tips .label { font-size: 10.5pt; }
+    .screen-only, .sec-nav { display: none !important; }
+    .card-sec { display: block !important; page-break-inside: avoid; break-inside: avoid; }
+    .tips, .folds, .batch, .aside, .history, .notes { page-break-inside: avoid; break-inside: avoid; }
+    .cb { width: 15pt; height: 15pt; }
+  }
+
+  @media screen {
+    html { background: #2a160c; }
+    body {
+      font-size: 20pt;
+      line-height: 1.4;
+      max-width: 46rem;
+      margin: 0 auto;
+      padding: 18px 20px 140px;
+      background: #fffaf3;
+      color: #1a0c06;
+    }
+    h1 { font-size: 30pt; margin-bottom: 6px; }
+    .subtitle { font-size: 18pt; margin-bottom: 10px; }
+    .credit { font-size: 13pt; line-height: 1.4; margin-bottom: 14px; }
+    .batch { padding: 14pt 16pt; margin-bottom: 16pt; border-width: 3pt; }
+    .batch h2 { font-size: 22pt; }
+    .batch .lede { font-size: 15pt; margin-bottom: 10pt; }
+    .ings { column-gap: 28pt; }
+    .ing { grid-template-columns: auto 1fr; padding: 7pt 0; column-gap: 14pt; }
+    .ing .amt { font-size: 22pt; }
+    .ing .what { font-size: 18pt; }
+    .batch .note { font-size: 15pt; }
+    h2.sec { font-size: 22pt; margin: 16pt 0 10pt; }
+    .goal { font-size: 17pt; }
+    ol.steps li { margin: 0 0 8pt; }
+    .tips { font-size: 16pt; padding: 10pt 14pt; }
+    .tips .label { font-size: 14pt; }
+    .fold { padding: 12pt; gap: 12pt; }
+    .cb {
+      width: 28pt;
+      height: 28pt;
+      min-width: 44px;
+      min-height: 44px;
+      margin-top: 2pt;
+      border-width: 3pt;
+    }
+    .aside, .history { padding: 14pt 16pt; font-size: 16pt; }
+    .links { font-size: 13pt; }
+    .line { height: 28pt; }
+    .sec-nav {
+      display: none;
+      position: sticky;
+      bottom: 0;
+      left: 0;
+      right: 0;
+      gap: 8px;
+      align-items: center;
+      justify-content: space-between;
+      padding: 10px 12px calc(10px + env(safe-area-inset-bottom));
+      margin: 18px -20px -140px;
+      background: #3a1c0c;
+      color: #fffaf3;
+      z-index: 5;
+    }
+    html.js .sec-nav { display: flex; }
+    html.js .card-sec { display: none; }
+    html.js .card-sec.active { display: block; }
+    .sec-nav button {
+      font: inherit;
+      font-size: 16pt;
+      font-weight: 700;
+      color: #3a1c0c;
+      background: #f4e3c8;
+      border: 2pt solid #f4e3c8;
+      border-radius: 8px;
+      min-height: 48px;
+      padding: 8px 14px;
+    }
+    .sec-nav button:focus, .sec-nav button:hover { outline: 3px solid #fffaf3; }
+    .sec-nav button:disabled { opacity: 0.45; }
+    .card-sec { scroll-margin-bottom: 140px; }
+    .sec-nav .sec-pos { font-weight: 700; font-size: 16pt; flex: 1; text-align: center; }
+    @media (max-width: 640px) {
+      .ings { grid-template-columns: 1fr; }
+      body { font-size: 18pt; padding: 14px 14px 110px; }
+    }
+  }
+</style>
+</head>
+<body>
+
+  <!--
+    Fill this card from a JSON recipe with templates/make_card.py (or `hive card FILE.json OUT.pdf`).
+    Leave a field blank in the JSON to hide it. Amounts should be in grams.
+
+    Each baker keeps their own JSON (for example ~/hive-mind/recipes/<slug>.json). Re-render
+    after every change they ask for, and add a short "why" line to history. Hive Mind updates
+    must never overwrite those personal recipe files.
+
+    Do not put someone else's copyrighted recipe on this card. Link their video or blog
+    in the credit line instead. A card may still hold the baker's own notes and a fold tracker.
+
+    Example JSON shape (placeholder amounts only — not a real recipe):
+
+    {
+      "title": "Recipe title",
+      "subtitle": "Short subtitle · grams only",
+      "credit": "Who this card is from, plus any teacher credit and links.",
+      "batch": {
+        "title": "Today's batch",
+        "lede": "One-line what this mix makes and any mixing order to notice first.",
+        "ingredients": [
+          {"amount": "100 g", "item": "ingredient name"},
+          {"amount": "200 g", "item": "another ingredient"}
+        ],
+        "note": "A short note under the amounts."
+      },
+      "sections": [
+        {
+          "title": "1. First section",
+          "goal": "Optional goal line.",
+          "steps": ["First step.", "Second step."],
+          "after": "Optional line after the steps.",
+          "warn": "Optional warning, e.g. Stop. Do not add salt yet.",
+          "folds": [{"label": "Fold 1.", "text": "What to do. Timer 30 minutes."}],
+          "tips": ["A tip for this section."],
+          "class": "block"
+        }
+      ],
+      "aside": {"title": "Baker's notes", "items": ["An extra note or oven reminder."]},
+      "history": [{"at": "2026-11-19", "why": "short reason for the change", "change": "what changed"}],
+      "notes_title": "My notes",
+      "notes_lines": 6,
+      "footer": "Credit or source line.",
+      "footer_links": [{"label": "Short link text", "url": "https://example.com"}]
+    }
+  -->
+
+  <h1>{{title}}</h1>
+  <p class="subtitle">{{subtitle}}</p>
+  <p class="credit">{{credit}}</p>
+
+  {{batch}}
+
+  {{sections}}
+
+  {{aside}}
+
+  {{history}}
+
+  {{notes}}
+
+  <p class="links">{{footer}}</p>
+
+  <nav class="sec-nav screen-only" hidden>
+    <button type="button" data-nav="prev">Previous</button>
+    <div class="sec-pos" data-pos>1 / 1</div>
+    <button type="button" data-nav="next">Next</button>
+    <button type="button" data-nav="all">Show all</button>
+  </nav>
+
+  <script>
+  (function () {
+    var secs = Array.prototype.slice.call(document.querySelectorAll(".card-sec"));
+    var nav = document.querySelector(".sec-nav");
+    if (!secs.length || !nav) return;
+    var i = 0, all = false, pos = nav.querySelector("[data-pos]");
+    function show() {
+      secs.forEach(function (s, n) { s.classList.toggle("active", all || n === i); });
+      if (pos) pos.textContent = all ? "All" : (i + 1) + " / " + secs.length;
+      nav.querySelector("[data-nav=prev]").disabled = all || i === 0;
+      nav.querySelector("[data-nav=next]").disabled = all || i === secs.length - 1;
+      nav.querySelector("[data-nav=all]").textContent = all ? "One at a time" : "Show all";
+    }
+    document.documentElement.classList.add("js");
+    nav.hidden = false;
+    nav.addEventListener("click", function (e) {
+      var b = e.target.closest("[data-nav]");
+      if (!b) return;
+      var act = b.getAttribute("data-nav");
+      if (act === "all") { all = !all; }
+      else if (act === "prev" && i > 0) { all = false; i -= 1; }
+      else if (act === "next" && i < secs.length - 1) { all = false; i += 1; }
+      show();
+      if (!all) secs[i].scrollIntoView({ block: "start" });
+    });
+    show();
+  })();
+  </script>
+
+</body>
+</html>

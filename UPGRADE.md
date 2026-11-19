@@ -1,5 +1,12 @@
 # Easy Sourdough Baker updates
 
+## 1.2.0 — 2026-11-19
+
+- Printable recipe cards: a reusable template and a helper (`hive card` or `templates/make_card.py`) fill a card from a baker's JSON recipe and write a letter-size PDF, plus HTML for the kitchen.
+- On a tablet, the HTML uses large type, high contrast, one section at a time, and tappable fold checkboxes. Printing uses the compact card layout.
+- Keep each baker's recipe as their own file (for example `~/hive-mind/recipes/<slug>.json`). Re-render after every adjustment, and record a short `why` line.
+- Hive Mind updates may refresh the template, but they never overwrite a baker's personal recipes.
+
 ## 1.1.1 — 2026-11-19
 
 - The hive client now lives in this repo as `client/hive`, so a published copy can install it on the baker's own computer.

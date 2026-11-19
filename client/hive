@@ -12,6 +12,7 @@ Usage:
   hive update --yes    Apply coaching guidance only, after the baker says yes; may refresh this client
   hive news            Show unseen videos and recipes, then mark them seen
   hive recipe share TITLE TEXT [--yes]
+  hive card FILE.json OUT.pdf   Fill the recipe-card template; write PDF and HTML
   hive review          Owner: list pending community recipes and new feedback
   hive approve ID      Owner: approve a pending recipe
   hive publish         Owner: publish approved recipes to the public repo and bump VERSION
@@ -63,6 +64,7 @@ def db():
     CREATE TABLE IF NOT EXISTS hive_news(id TEXT PRIMARY KEY, kind TEXT, title TEXT, url TEXT, note TEXT, date TEXT,
       source TEXT, fetched TEXT, seen INTEGER DEFAULT 0);
     CREATE TABLE IF NOT EXISTS hive_coaching(path TEXT PRIMARY KEY, content TEXT, version TEXT, fetched TEXT);
+    CREATE TABLE IF NOT EXISTS hive_templates(path TEXT PRIMARY KEY, content TEXT, version TEXT, fetched TEXT);
     """)
     return c
 def meta(c, k, v=None):
@@ -409,6 +411,7 @@ def cmd_update(c, yes=False):
             continue
         c.execute("INSERT OR REPLACE INTO hive_coaching(path, content, version, fetched) VALUES(?,?,?,?)",
                   (rel, content, version, fetched))
+    apply_templates(c, version, fetched, skip_notes)
     meta(c, "update_version", version)
     c.commit()
     print(baker_note(version, applied_news))
@@ -419,6 +422,104 @@ def cmd_update(c, yes=False):
         if msg:
             print(msg)
     return 0
+
+
+def templates_write_dir():
+    env = os.environ.get("HIVE_TEMPLATES")
+    if env:
+        return env
+    try:
+        here = os.path.dirname(os.path.abspath(os.path.realpath(sys.argv[0])))
+    except Exception:
+        here = ""
+    if os.path.basename(here) == "hive-mind":
+        return os.path.join(here, "templates")
+    return None
+
+def apply_templates(c, version, fetched, skip_notes):
+    manifest, mcode = raw_get("templates/MANIFEST.json")
+    paths = []
+    if mcode == 200:
+        try:
+            paths = list(json.loads(manifest))
+        except Exception:
+            paths = []
+    if not paths:
+        paths = ["recipe-card.html", "make_card.py", "README.md"]
+    dest = templates_write_dir()
+    if dest:
+        try:
+            os.makedirs(dest, exist_ok=True)
+        except OSError:
+            dest = None
+    for name in paths:
+        if not isinstance(name, str) or ".." in name or name.startswith("/"):
+            continue
+        rel = name if name.startswith("templates/") else "templates/" + name
+        content, cc = raw_get(rel)
+        if cc != 200:
+            continue
+        reason = unsafe_reason(content)
+        if reason:
+            skip_notes.append(f"Skipped {rel}: {reason}. I did not apply it.")
+            continue
+        c.execute("INSERT OR REPLACE INTO hive_templates(path, content, version, fetched) VALUES(?,?,?,?)",
+                  (rel, content, version, fetched))
+        if dest:
+            out = os.path.join(dest, os.path.basename(rel))
+            if os.path.basename(os.path.dirname(os.path.abspath(out))) == "recipes":
+                continue
+            try:
+                with open(out, "w", encoding="utf-8") as f:
+                    f.write(content)
+                if out.endswith(".py"):
+                    os.chmod(out, os.stat(out).st_mode | 0o111)
+            except OSError:
+                skip_notes.append(f"Could not save {rel} onto disk.")
+
+def find_make_card():
+    env = os.environ.get("HIVE_MAKE_CARD")
+    if env and os.path.isfile(env):
+        return env
+    here_try = []
+    tdir = os.environ.get("HIVE_TEMPLATES")
+    if tdir:
+        here_try.append(os.path.join(tdir, "make_card.py"))
+    try:
+        here = os.path.dirname(os.path.abspath(os.path.realpath(sys.argv[0])))
+        here_try.append(os.path.join(here, "templates", "make_card.py"))
+        if os.path.basename(here) == "hive-mind":
+            here_try.append(os.path.join(here, "templates", "make_card.py"))
+    except Exception:
+        pass
+    for pth in here_try:
+        if pth and os.path.isfile(pth):
+            return pth
+    return None
+
+def cmd_card(args):
+    if len(args) != 2:
+        print("usage: hive card FILE.json OUT.pdf"); return 2
+    script = find_make_card()
+    if not script:
+        body, code = raw_get("templates/make_card.py")
+        tmpl, tcode = raw_get("templates/recipe-card.html")
+        if code != 200 or tcode != 200:
+            print("could not find templates/make_card.py"); return 1
+        if unsafe_reason(body) or unsafe_reason(tmpl):
+            print("skipped card helper: it asked for passwords, logins, or personal info"); return 1
+        td = tempfile.mkdtemp(prefix="hive-card-")
+        script = os.path.join(td, "make_card.py")
+        with open(script, "w", encoding="utf-8") as f:
+            f.write(body)
+        with open(os.path.join(td, "recipe-card.html"), "w", encoding="utf-8") as f:
+            f.write(tmpl)
+    r = subprocess.run([sys.executable, script, args[0], args[1]], capture_output=True, text=True)
+    if r.stdout:
+        sys.stdout.write(r.stdout if r.stdout.endswith("\n") else r.stdout + "\n")
+    if r.returncode and r.stderr:
+        print(r.stderr.strip()[-240:])
+    return 0 if r.returncode == 0 else 1
 
 def cmd_weekly(c, yes=False):
     items = pending(c)
@@ -771,6 +872,8 @@ def main(a):
         return cmd_update(c, yes=(len(a) == 2 and a[1] == "--yes"))
     elif a == ["news"]:
         return cmd_news(c)
+    elif a[:1] == ["card"]:
+        return cmd_card(a[1:])
     elif a[:2] == ["recipe", "share"]:
         return cmd_recipe_share(c, a[2:])
     elif a == ["review"]:

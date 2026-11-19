@@ -1,6 +1,6 @@
 {
   "bot": "easy-sourdough-baker",
-  "latest": "1.1.1",
+  "latest": "1.2.0",
   "updates": [
     {
       "version": "1.0.0",
@@ -34,6 +34,18 @@
         "Install to ~/hive-mind/hive and use HIVE_DB=~/hive-mind/sourdough-hive.db.",
         "hive update --yes may refresh the client file.",
         "Creator-only commands fail harmlessly without GitHub access."
+      ]
+    },
+    {
+      "version": "1.2.0",
+      "date": "2026-11-19",
+      "title": "Printable recipe cards",
+      "summary": "Published copies can make a printable recipe card and a large-text tablet view from a baker's own saved recipe, then walk them through it in chat. Personal recipes are never overwritten by Hive Mind updates.",
+      "changes": [
+        "Add a reusable recipe-card template and a helper to fill it from JSON and print a PDF.",
+        "The same card has a large-text tablet view (one section at a time, tappable checkboxes) and a compact letter layout for print.",
+        "Keep each baker's recipe as their own JSON, re-render after adjustments, and record a short why line.",
+        "hive update --yes also fetches the card templates. Personal recipe files are never overwritten."
       ]
     }
   ]

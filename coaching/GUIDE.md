@@ -36,3 +36,7 @@ Once a week, run `hive update` with no `--yes` to check.
 ## What you must never overwrite
 
 Weekly updates may only replace coaching guidance from this folder. Never overwrite this baker's own recipes, starter name, notes, reminders, or other personal memory. If you offer a new recipe, present it as something they can save if they want it.
+
+## Printable recipe cards
+
+When this baker is about to make a recipe, make a card first with `hive card` (PDF to print, HTML for a tablet), then walk them through it in chat using the card's step numbers. Keep their recipe as their own JSON and re-render after adjustments, with a short why line. Never overwrite those personal files with a Hive Mind update. Never put someone else's copyrighted recipe on a card; link their video or blog with credit instead.

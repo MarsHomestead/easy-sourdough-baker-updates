@@ -23,6 +23,7 @@ Nothing here holds personal information: no names, emails, handles, locations, o
 - `news/recipes.json` — recipes Easy Sourdough Baker chooses to publish
 - `community/recipes.json` — recipes other bakers shared, after they are approved
 - `client/hive` — the Python client a published copy installs on the baker's computer (see `client/README.md`)
+- `templates/` — printable recipe-card template and helper (`recipe-card.html`, `make_card.py`)
 
 ## How a published copy updates
 
@@ -40,6 +41,11 @@ https://raw.githubusercontent.com/MarsHomestead/easy-sourdough-baker-updates/mai
 ## Community recipes
 
 Bakers can offer a recipe to the shared collection with `hive recipe share`. The text is cleaned first, and the baker has to agree before it is sent. Offers wait in a private review queue. They appear in `community/recipes.json` only after they are approved. Published community recipes never include the baker's name or contact details.
+
+
+## Printable recipe cards
+
+When a baker is about to make a recipe, a published copy can fill `templates/recipe-card.html` from the baker's own JSON (`hive card RECIPE.json OUT.pdf`) and give them a letter-size PDF to print, plus an HTML kitchen view for a tablet (large type, one section at a time, tappable checkboxes). Keep each baker's recipe in their own file (for example `~/hive-mind/recipes/<slug>.json`), re-render after every adjustment, and record a short `why` line. Hive Mind updates never overwrite those personal recipes. Amounts are in grams. Do not put someone else's copyrighted recipe on a card; link their video or blog with credit instead.
 
 ## Credit
 
